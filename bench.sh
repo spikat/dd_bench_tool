@@ -93,15 +93,13 @@ isolate_cpu_cgroupv2() {
 }
 
 reset_cpu_cgroupv1() {
-    echo "skipping reset cpu isolation"
-    # echo "reset cpu isolation"
-    # cset shield --reset
+    echo "reset cpu isolation"
+    cset shield --reset
 }
 
 isolate_cpu_cgroupv1() {
-    echo "skipping isolate cpu for cgroup v1"
-    # echo "isolate cpu for cgroup v1"
-    # cset shield --cpu="$CPU_ISOLATED" --kthread=on
+    echo "isolate cpu for cgroup v1"
+    cset shield --cpu="$CPU_ISOLATED" --kthread=on
 }
 
 unset_system() {
@@ -117,11 +115,6 @@ unset_system() {
         echo 1 > /sys/devices/system/cpu/cpufreq/boost
     fi
     echo $INITIAL_PERF_EVENT_PARANOID > /proc/sys/kernel/perf_event_paranoid
-    if is_cgroup_v2; then
-        reset_cpu_cgroupv2
-    else
-        reset_cpu_cgroupv1
-    fi
 }
 
 set_system() {
@@ -137,10 +130,24 @@ set_system() {
         echo 0 > /sys/devices/system/cpu/cpufreq/boost
     fi
     echo 0 > /proc/sys/kernel/perf_event_paranoid
+}
+
+unshield_cpus() {
+    echo "restore shielded cpus using cgroup cpuset"
     if is_cgroup_v2; then
-        isolate_cpu_cgroupv2
+        reset_cpu_cgroupv2
     else
+        reset_cpu_cgroupv1
+    fi
+}
+
+shield_cpus() {
+    echo "isolate cpus using cgroup cpuset shield"
+    if ! is_cgroup_v2; then
+        echo "cgroupv1 detected, cpu isolation though cgroupv2 won't be possible, please consider using isolcpu grub cmdline option instead"
         isolate_cpu_cgroupv1
+    else
+        isolate_cpu_cgroupv2
     fi
 }
 
@@ -293,6 +300,9 @@ usage() {
     echo "    clean: cleanup the bench environment"
     echo "    bench: launch iperf benchmark"
     echo "    sysprobe: start system-probe (will block until ^C)"
+    echo "    help: print this help"
+    echo "    shield_cpus: isolate cpus using cgroup cpuset/shield (NB: not fully working)"
+    echo "    unshield_cpus: restore shielded cpus (NB: not fully working)"
 }
 
 ###
@@ -310,9 +320,9 @@ if (( EUID != 0 )); then
     exit 1
 fi
 
-# check cgroup version
-if ! is_cgroup_v2; then
-    echo "cgroupv1 detected, cpu isolation though cgroupv2 won't be possible, please consider using isolcpu grub cmdline option instead"
+if [ $# -eq 0 ]; then
+    usage
+    exit 0
 fi
 
 SETUP_FLAG="/tmp/.bench_setup_done"
@@ -345,6 +355,18 @@ for arg in "$@"; do
 
         "sysprobe")
             run_sysprobe
+            ;;
+
+        "shield_cpus")
+            shield_cpus
+            ;;
+
+        "unshield_cpus")
+            unshield_cpus
+            ;;
+
+        "help")
+            usage
             ;;
 
         *)

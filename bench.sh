@@ -40,6 +40,10 @@ CPU_SIBLINGS="13 14 15"
 # Possible values: cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors
 INITIAL_SCALING_GOV=powersave
 
+# TODO: SET TO /proc/sys/kernel/perf_event_paranoid
+# Possible values: -1 to 4
+INITIAL_PERF_EVENT_PARANOID=2
+
 die() {
     echo "ERROR: $1"
     # cleanup
@@ -112,7 +116,7 @@ unset_system() {
     if [ -e /sys/devices/system/cpu/cpufreq/boost ]; then
         echo 1 > /sys/devices/system/cpu/cpufreq/boost
     fi
-    echo 4 > /proc/sys/kernel/perf_event_paranoid
+    echo $INITIAL_PERF_EVENT_PARANOID > /proc/sys/kernel/perf_event_paranoid
     if is_cgroup_v2; then
         reset_cpu_cgroupv2
     else

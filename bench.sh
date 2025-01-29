@@ -2,7 +2,7 @@
 set -uo pipefail
 shopt -s globstar
 
-NEEDED_UTILS="ip iperf3 jq nice taskset cset"
+NEEDED_UTILS="ip iperf3 jq nice taskset cset dialog"
 
 SYSPROBE_PATH="./system-probe"
 SYSPROBE_LOG="system-probe.log"
@@ -219,10 +219,49 @@ run_iperf_client() {
     rm -f "$OUTPUT_JSON_FILE" || :
 }
 
+# configure which network probes we should run (may be overrideed by config_all_probes??)
+select_sysprobe_options() {
+    export DD_RUNTIME_SECURITY_CONFIG_NETWORK_ENABLED=false
+    export DD_RUNTIME_SECURITY_CONFIG_NETWORK_INGRESS_ENABLED=false
+    export DD_RUNTIME_SECURITY_CONFIG_NETWORK_RAW_PACKET_ENABLED=false
+    export DD_RUNTIME_SECURITY_CONFIG_NETWORK_FLOW_MONITOR_ENABLED=false
+
+    # Display dialog checklist
+    tempfile=$(mktemp)
+    dialog --title "system-probe configuration" \
+           --checklist "Select network options:" 0 0 4 \
+           "network" "network.enabled" ON \
+           "ingress" "network.ingress.enabled" ON \
+           "raw_packet" "network.raw_packet.enabled" ON \
+           "flow_monitor" "network.flow_monitor.enabled" ON 2> $tempfile
+
+    # Get the selected options
+    selected=$(cat $tempfile)
+    rm -f $tempfile
+    for option in $selected; do
+        case $option in
+            "network")
+                export DD_RUNTIME_SECURITY_CONFIG_NETWORK_ENABLED=true
+                ;;
+            "ingress")
+                export DD_RUNTIME_SECURITY_CONFIG_NETWORK_INGRESS_ENABLED=true
+                ;;
+            "raw_packet")
+                export DD_RUNTIME_SECURITY_CONFIG_NETWORK_RAW_PACKET_ENABLED=true
+                ;;
+            "flow_monitor")
+                export DD_RUNTIME_SECURITY_CONFIG_NETWORK_FLOW_MONITOR_ENABLED=true
+                ;;
+        esac
+    done
+}
+
 run_sysprobe() {
     if [ ! -f $SYSPROBE_PATH ]; then
         die "system-probe not found"
     fi
+
+    select_sysprobe_options
 
     # enable CWS with all probes:
     export DD_RUNTIME_SECURITY_CONFIG_ENABLED=true
@@ -233,13 +272,10 @@ run_sysprobe() {
     export DD_RUNTIME_SECURITY_CONFIG_SECURITY_PROFILE_ENABLED=false
     export DD_RUNTIME_SECURITY_CONFIG_SBOM_ENABLED=false
     export DD_RUNTIME_SECURITY_CONFIG_HASH_RESOLVER_ENABLED=false
-
-    # configure which network probes we should run (may be overrideed by config_all_probes??)
-    export DD_RUNTIME_SECURITY_CONFIG_NETWORK_ENABLED=true
-    export DD_RUNTIME_SECURITY_CONFIG_NETWORK_INGRESS_ENABLED=true
-    export DD_RUNTIME_SECURITY_CONFIG_NETWORK_RAW_PACKET_ENABLED=true
-    export DD_RUNTIME_SECURITY_CONFIG_NETWORK_FLOW_MONITOR_ENABLED=true
     export DD_RUNTIME_SECURITY_CONFIG_NETWORK_FLOW_MONITOR_SK_STORAGE=true
+
+    echo "DD OPTIONS:"
+    env|grep DD_
 
     # launch system-probe binary
     taskset -c $CPU_SYSPROBE \
@@ -274,7 +310,6 @@ fi
 if ! is_cgroup_v2; then
     echo "cgroupv1 detected, cpu isolation though cgroupv2 won't be possible, please consider using isolcpu grub cmdline option instead"
 fi
-
 
 SETUP_FLAG="/tmp/.bench_setup_done"
 # Loop through all arguments

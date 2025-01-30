@@ -4,7 +4,7 @@ shopt -s globstar
 
 NEEDED_UTILS="ip iperf3 jq nice taskset cset dialog"
 
-SERVICES_TO_STOP="apache2 unattended-upgrades datadog-agent"
+SERVICES_TO_STOP="apache2 unattended-upgrades datadog-agent named"
 
 SYSPROBE_PATH="./system-probe"
 SYSPROBE_LOG="system-probe.log"
@@ -196,6 +196,29 @@ run_iperf_server() {
          iperf3 -s -D || die "failed to run iperf server"
 }
 
+run_iperf_server_dns() {
+    # -s: server mode
+    # -D: to daemonise
+    # -1: to exit after one client bench
+    # -p X: specify port
+    taskset -c $CPU_SERVER \
+         nice -20 \
+         ip netns exec $NS1 \
+         iperf3 -s -D -p 53 || die "failed to run iperf server"
+}
+
+parse_iperf_ouptut() {
+    SENT=$(jq -r .end.sum_sent.bits_per_second $1)
+    RECV=$(jq -r .end.sum_received.bits_per_second $1)
+    # bits/s to Gb/s
+    SENT=$(echo "scale=9; $SENT / 1000000000"|bc)
+    RECV=$(echo "scale=9; $RECV / 1000000000"|bc)
+    TOTAL=$(echo "$SENT + $RECV"|bc)
+    echo "SUM SENT Gb/s: $SENT"
+    echo "SUM RECV Gb/s: $RECV"
+    echo "SUM TOTAL Gb/s: $TOTAL"
+}
+
 run_iperf_client() {
     OUTPUT_JSON_FILE="output.json"
     # -c <server ip>: client mode
@@ -204,23 +227,36 @@ run_iperf_client() {
     # -o N: to omit the first N sec of bench on results
     # --repeating-payload: do not use urandom for payloads
     # -J: json output
+    # -u: for UDP
     ## don't use:
     # -Z: use zerocopy << good for throughput, bad for consistency, don't use
     # -P N: paralel bench on N threads
-    # -u: for UDP
     taskset -c $CPU_CLIENT \
          nice -20 \
          ip netns exec $NS2 \
          iperf3 -c $IP1 -t 13 -O 3 --repeating-payload -4 -J > "$OUTPUT_JSON_FILE" || die "failed to run iperf client"
-    SENT=$(jq -r .end.sum_sent.bits_per_second "$OUTPUT_JSON_FILE")
-    RECV=$(jq -r .end.sum_received.bits_per_second "$OUTPUT_JSON_FILE")
-    # bits/s to Gb/s
-    SENT=$(echo "scale=9; $SENT / 1000000000"|bc)
-    RECV=$(echo "scale=9; $RECV / 1000000000"|bc)
-    TOTAL=$(echo "$SENT + $RECV"|bc)
-    echo "SUM SENT Gb/s: $SENT"
-    echo "SUM RECV Gb/s: $RECV"
-    echo "SUM TOTAL Gb/s: $TOTAL"
+    parse_iperf_ouptut "$OUTPUT_JSON_FILE"
+    rm -f "$OUTPUT_JSON_FILE" || :
+}
+
+run_iperf_client_dns() {
+    OUTPUT_JSON_FILE="output.json"
+    # -c <server ip>: client mode
+    # -t N: for test len
+    # -d: for dual
+    # -o N: to omit the first N sec of bench on results
+    # --repeating-payload: do not use urandom for payloads
+    # -J: json output
+    # -u: for UDP
+    # -p N: port
+    ## don't use:
+    # -Z: use zerocopy << good for throughput, bad for consistency, don't use
+    # -P N: paralel bench on N threads
+    taskset -c $CPU_CLIENT \
+         nice -20 \
+         ip netns exec $NS2 \
+         iperf3 -c $IP1 -t 13 -O 3 --repeating-payload -u -p 53 -4 -J > "$OUTPUT_JSON_FILE" || die "failed to run iperf client"
+    parse_iperf_ouptut "$OUTPUT_JSON_FILE"
     rm -f "$OUTPUT_JSON_FILE" || :
 }
 
@@ -307,7 +343,8 @@ usage() {
     echo "    help: print this help"
     echo "    setup: setup the bench environment"
     echo "    clean: cleanup the bench environment"
-    echo "    bench: launch iperf benchmark"
+    echo "    bench: launch iperf TCP benchmark"
+    echo "    bench_dns: launch iperf UDP benchmark on port 53"
     echo "    sysprobe: start system-probe (will block until ^C)"
     echo "    shield_cpus: isolate cpus using cgroup cpuset/shield (NB: not fully working)"
     echo "    unshield_cpus: restore shielded cpus (NB: not fully working)"
@@ -361,6 +398,17 @@ for arg in "$@"; do
             fi
             sleep 1
             run_iperf_server
+            run_iperf_client
+            ;;
+
+        "bench_dns")
+            if [ ! -e "$SETUP_FLAG" ]; then
+                echo "please setup the environmen before run the bench"
+                usage
+                exit 1
+            fi
+            sleep 1
+            run_iperf_server_dns
             run_iperf_client
             ;;
 

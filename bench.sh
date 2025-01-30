@@ -4,6 +4,8 @@ shopt -s globstar
 
 NEEDED_UTILS="ip iperf3 jq nice taskset cset dialog"
 
+SERVICES_TO_STOP="apache2 unattended-upgrades datadog-agent"
+
 SYSPROBE_PATH="./system-probe"
 SYSPROBE_LOG="system-probe.log"
 SYSPROBE_PID="system-probe.pid"
@@ -46,15 +48,7 @@ INITIAL_PERF_EVENT_PARANOID=2
 
 die() {
     echo "ERROR: $1"
-    # cleanup
     exit 1
-}
-
-cleanup() {
-    echo cleanup
-    unset_ifaces
-    unset_system
-    echo cleanup done
 }
 
 is_cgroup_v2() {
@@ -208,16 +202,16 @@ run_iperf_client() {
     # -t N: for test len
     # -d: for dual
     # -o N: to omit the first N sec of bench on results
-    # -Z: use zerocopy
     # --repeating-payload: do not use urandom for payloads
     # -J: json output
     ## don't use:
+    # -Z: use zerocopy << good for throughput, bad for consistency, don't use
     # -P N: paralel bench on N threads
     # -u: for UDP
     taskset -c $CPU_CLIENT \
          nice -20 \
          ip netns exec $NS2 \
-         iperf3 -c $IP1 -t 13 -O 3 -Z --repeating-payload -4 -J > "$OUTPUT_JSON_FILE" || die "failed to run iperf client"
+         iperf3 -c $IP1 -t 13 -O 3 --repeating-payload -4 -J > "$OUTPUT_JSON_FILE" || die "failed to run iperf client"
     SENT=$(jq -r .end.sum_sent.bits_per_second "$OUTPUT_JSON_FILE")
     RECV=$(jq -r .end.sum_received.bits_per_second "$OUTPUT_JSON_FILE")
     # bits/s to Gb/s
@@ -290,17 +284,31 @@ run_sysprobe() {
 
     # launch system-probe binary
     taskset -c $CPU_SYSPROBE \
-            $SYSPROBE_PATH --config /tmp
+            $SYSPROBE_PATH --config /tmp >/dev/null
+}
+
+stop_services() {
+    for service in "$SERVICES_TO_STOP"; do
+        echo "stopping $service"
+        systemctl stop $service
+    done
+}
+
+restart_services() {
+    for service in "$SERVICES_TO_STOP"; do
+        echo "restarting $service"
+        systemctl start $service
+    done
 }
 
 usage() {
     echo "./bench [COMMAND]..."
     echo "  COMMANDS:"
+    echo "    help: print this help"
     echo "    setup: setup the bench environment"
     echo "    clean: cleanup the bench environment"
     echo "    bench: launch iperf benchmark"
     echo "    sysprobe: start system-probe (will block until ^C)"
-    echo "    help: print this help"
     echo "    shield_cpus: isolate cpus using cgroup cpuset/shield (NB: not fully working)"
     echo "    unshield_cpus: restore shielded cpus (NB: not fully working)"
 }
@@ -333,13 +341,16 @@ for arg in "$@"; do
             echo "setting up the bench environment"
             set_ifaces
             set_system
+            stop_services
             touch "$SETUP_FLAG"
             ;;
 
         "clean")
             echo "unset the bench environment"
             rm -f "$SETUP_FLAG"
-            cleanup
+            unset_ifaces
+            unset_system
+            restart_services
             ;;
 
         "bench")
